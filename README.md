@@ -65,7 +65,7 @@ Para acordar um monitor apagado: **mexa o mouse nele** ou aperte o atalho de nov
 - **Não usa internet.** Não há nenhum código de rede no programa.
 - Para saber **em qual monitor o vídeo está**, o programa compara "fotos" minúsculas da tela (**64 × 36 pixels**, impossível ler qualquer coisa), só quando há vídeo tocando e só nos últimos segundos antes de apagar. As fotos ficam **apenas na memória** (no máximo uma por monitor), **nunca são salvas nem enviadas**, e são descartadas em seguida. Isso pode ser desligado em **Comportamento ▸ Detectar monitor do vídeo (fotos)**.
 - O atalho usa o recurso oficial de atalhos do Windows (`RegisterHotKey`). O programa **não lê o que você digita**.
-- Tudo o que é gravado: o arquivo de configurações `%APPDATA%\OledDescanso.ini` e, se você ativar, a entrada de iniciar com o Windows e o atalho no menu Iniciar.
+- Tudo o que é gravado: o arquivo de configurações `%APPDATA%\OledDescanso.ini` e, se você ativar, a tarefa **"OLED Descanso"** no Agendador de Tarefas (para iniciar com o Windows) e o atalho no menu Iniciar.
 
 ## Consumo
 

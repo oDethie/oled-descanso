@@ -14,8 +14,8 @@ using System.Reflection;
 [assembly: AssemblyProduct("OLED Descanso")]
 [assembly: AssemblyDescription("Apaga o monitor OLED quando ele fica sem uso")]
 [assembly: AssemblyCopyright("Licença MIT")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.0.1.0")]
+[assembly: AssemblyFileVersion("1.0.1.0")]
 
 static class Program
 {
@@ -946,6 +946,9 @@ class App : ApplicationContext
         atalho = new Atalho(AtalhoPressionado);
         AplicarAtalho(true);
 
+        // Iniciar com o Windows: migra/atualiza em segundo plano (schtasks leva ~100 ms)
+        System.Threading.ThreadPool.QueueUserWorkItem(_ => { try { ConferirInicio(); } catch { } });
+
         // Ponteiro: garante que nunca fique escondido por engano (inicio, saida, erro, logoff)
         PonteiroMouse.Mostrar(true);
         timerMouse.Tick += (s, e) => ChecarMouse();
@@ -1664,18 +1667,101 @@ class App : ApplicationContext
         }
     }
 
-    const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    bool IniciaComWindows()
+    // ---- Iniciar com o Windows: tarefa "ao fazer logon" no Agendador de Tarefas ----
+    // (mais confiavel que a lista "Run" do registro, que gerenciadores de inicializacao
+    //  como o do Norton Utilities podem atrasar ou pular)
+    const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run"; // metodo antigo (so para migrar)
+    const string NomeTarefa = "OLED Descanso";
+    bool? inicioCache;
+
+    static int Schtasks(string args)
+    {
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("schtasks.exe", args)
+            { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+            using (var p = System.Diagnostics.Process.Start(psi))
+            {
+                p.StandardOutput.ReadToEnd(); p.StandardError.ReadToEnd();
+                p.WaitForExit(15000);
+                return p.ExitCode;
+            }
+        }
+        catch { return -1; }
+    }
+
+    static bool TarefaExiste() { return Schtasks("/query /tn \"" + NomeTarefa + "\"") == 0; }
+
+    static bool CriarTarefa()
+    {
+        string usuario = System.Security.Principal.WindowsIdentity.GetCurrent().Name;
+        string exe = Application.ExecutablePath;
+        Func<string, string> X = System.Security.SecurityElement.Escape;
+        string xml =
+            "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n" +
+            "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\r\n" +
+            "  <RegistrationInfo><Description>Abre o OLED Descanso ao entrar no Windows.</Description></RegistrationInfo>\r\n" +
+            "  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>" + X(usuario) + "</UserId><Delay>PT5S</Delay></LogonTrigger></Triggers>\r\n" +
+            "  <Principals><Principal id=\"Author\"><UserId>" + X(usuario) + "</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>\r\n" +
+            "  <Settings>\r\n" +
+            "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\r\n" +
+            "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\r\n" +
+            "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\r\n" +
+            "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\r\n" + // sem limite (o padrao fecharia apos 3 dias)
+            "    <Priority>7</Priority>\r\n" +
+            "  </Settings>\r\n" +
+            "  <Actions Context=\"Author\"><Exec><Command>" + X(exe) + "</Command><WorkingDirectory>" + X(Path.GetDirectoryName(exe)) + "</WorkingDirectory></Exec></Actions>\r\n" +
+            "</Task>\r\n";
+        string tmp = Path.Combine(Path.GetTempPath(), "OledDescanso_tarefa.xml");
+        try
+        {
+            File.WriteAllText(tmp, xml, System.Text.Encoding.Unicode);
+            return Schtasks("/create /tn \"" + NomeTarefa + "\" /xml \"" + tmp + "\" /f") == 0;
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    static bool TemEntradaRun()
     {
         using (var k = Registry.CurrentUser.OpenSubKey(RunKey))
             return k != null && k.GetValue("OledDescanso") != null;
     }
+
+    static void RemoverEntradaRun()
+    {
+        try { using (var k = Registry.CurrentUser.OpenSubKey(RunKey, true)) if (k != null) k.DeleteValue("OledDescanso", false); }
+        catch { }
+    }
+
+    // Ao abrir: migra do metodo antigo e garante que a tarefa aponta para este .exe (se mudou de pasta)
+    void ConferirInicio()
+    {
+        bool run = TemEntradaRun(), tarefa = TarefaExiste();
+        if (run || tarefa)
+        {
+            if (CriarTarefa()) RemoverEntradaRun(); // recria com o caminho atual; so remove o antigo se deu certo
+        }
+        inicioCache = run || tarefa;
+    }
+
+    bool IniciaComWindows()
+    {
+        if (inicioCache == null) inicioCache = TarefaExiste() || TemEntradaRun();
+        return inicioCache.Value;
+    }
+
     void AlternarInicio()
     {
-        using (var k = Registry.CurrentUser.OpenSubKey(RunKey, true))
+        if (IniciaComWindows())
         {
-            if (IniciaComWindows()) k.DeleteValue("OledDescanso", false);
-            else k.SetValue("OledDescanso", "\"" + Application.ExecutablePath + "\"");
+            Schtasks("/delete /tn \"" + NomeTarefa + "\" /f");
+            RemoverEntradaRun();
         }
+        else if (!CriarTarefa())
+        {
+            MessageBox.Show("Não consegui criar a tarefa de inicialização no Agendador de Tarefas.", "OLED Descanso",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        inicioCache = null;
     }
 }
