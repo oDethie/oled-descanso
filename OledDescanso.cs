@@ -14,8 +14,8 @@ using System.Reflection;
 [assembly: AssemblyProduct("OLED Descanso")]
 [assembly: AssemblyDescription("Apaga o monitor OLED quando ele fica sem uso")]
 [assembly: AssemblyCopyright("Licença MIT")]
-[assembly: AssemblyVersion("1.0.1.0")]
-[assembly: AssemblyFileVersion("1.0.1.0")]
+[assembly: AssemblyVersion("1.0.2.0")]
+[assembly: AssemblyFileVersion("1.0.2.0")]
 
 static class Program
 {
@@ -729,7 +729,7 @@ class App : ApplicationContext
     // Opcoes extras (desligadas por padrao)
     bool esmaecer;          // escurece em 2 s em vez de cortar
     readonly HashSet<string> ddcMonitores = new HashSet<string>(); // monitores que entram em espera de verdade (DDC/CI)
-    int limiteMin = 120;    // limite sem uso: apos X min sem mouse/teclado/controle, apaga mesmo com video (0 = desligado)
+    int limiteMin = 0;      // limite sem uso: apos X min sem mouse/teclado/controle, apaga mesmo com video (0 = desligado, padrao)
     bool detectarFotos = true; // usa "fotos" pequenas para saber em qual monitor esta o video
     DateTime ultimaPresenca = DateTime.Now;
 

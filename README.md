@@ -26,7 +26,7 @@ No OLED, preto é **pixel desligado**, então a tela preta do programa equivale 
 - **Inteligente com vídeos e jogos:**
   - não apaga o monitor onde um vídeo está tocando;
   - não apaga enquanto você joga em tela cheia (inclusive só com controle Xbox/XInput);
-  - **limite de segurança:** se ninguém mexer no PC por X horas, apaga mesmo com vídeo (útil se você dormir com uma playlist rodando).
+  - **limite de segurança** (opcional): se ninguém mexer no PC por X horas, apaga mesmo com vídeo (útil se você dormir com uma playlist rodando).
 - **Esmaecer suave** em vez de cortar de uma vez (opcional).
 - **Desligar de verdade** o monitor (modo de espera via DDC/CI), por monitor (opcional).
 - **Esconde o ponteiro do mouse** parado em cima do OLED (opcional).
