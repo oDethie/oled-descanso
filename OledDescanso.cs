@@ -16,8 +16,8 @@ using System.Reflection;
 [assembly: AssemblyProduct("OLED Descanso")]
 [assembly: AssemblyDescription("Apaga o monitor OLED quando ele fica sem uso")]
 [assembly: AssemblyCopyright("Licença MIT")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.1.1.0")]
+[assembly: AssemblyFileVersion("1.1.1.0")]
 
 static class Program
 {
@@ -963,7 +963,12 @@ class App : ApplicationContext
         LerConfig();
         icone.Icon = iconeNormal;
         icone.Visible = true;
-        icone.DoubleClick += (s, e) => Pausar(pausado ? 0 : -1);
+        // clique unico (esq.) abre a janela, mas espera o tempo de clique duplo do Windows:
+        // se vier o segundo clique, so pausa/retoma (atalho antigo) e a janela nao abre
+        var cliqueUnico = new System.Windows.Forms.Timer { Interval = SystemInformation.DoubleClickTime };
+        cliqueUnico.Tick += (s, e) => { cliqueUnico.Stop(); AbrirConfiguracoes(); };
+        icone.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) { cliqueUnico.Stop(); cliqueUnico.Start(); } };
+        icone.DoubleClick += (s, e) => { cliqueUnico.Stop(); Pausar(pausado ? 0 : -1); };
         MontarMenu();
 
         timer.Interval = 500;
