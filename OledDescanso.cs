@@ -16,8 +16,8 @@ using System.Reflection;
 [assembly: AssemblyProduct("OLED Descanso")]
 [assembly: AssemblyDescription("Apaga o monitor OLED quando ele fica sem uso")]
 [assembly: AssemblyCopyright("Licença MIT")]
-[assembly: AssemblyVersion("1.1.1.0")]
-[assembly: AssemblyFileVersion("1.1.1.0")]
+[assembly: AssemblyVersion("1.1.2.0")]
+[assembly: AssemblyFileVersion("1.1.2.0")]
 
 static class Program
 {
@@ -971,6 +971,7 @@ class App : ApplicationContext
         icone.DoubleClick += (s, e) => { cliqueUnico.Stop(); Pausar(pausado ? 0 : -1); };
         MontarMenu();
 
+        ApararDepois(4000); // depois de abrir
         timer.Interval = 500;
         timer.Tick += (s, e) => Verificar();
         timer.Start();
@@ -1245,7 +1246,7 @@ class App : ApplicationContext
     void Esconder(string k)
     {
         Cortina c;
-        if (cortinas.TryGetValue(k, out c) && c.Visible) c.Sumir();
+        if (cortinas.TryGetValue(k, out c) && c.Visible) { c.Sumir(); ApararDepois(3000); }
         if (ddcDesligado.Remove(k)) { var t = TelaDe(k); if (t != null) Ddc(t.Bounds, 1); } // acorda o monitor
     }
     void EsconderTodas() { foreach (var k in new List<string>(cortinas.Keys)) Esconder(k); }
@@ -1378,7 +1379,7 @@ class App : ApplicationContext
             if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked && segurarMenu) e.Cancel = true;
             segurarMenu = false;
         };
-        menu.Closed += (s, e) => menuAberto = false;
+        menu.Closed += (s, e) => { menuAberto = false; ApararDepois(1000); };
         menu.Opening += (s, e) =>
         {
             menuAberto = true;
@@ -1488,9 +1489,29 @@ class App : ApplicationContext
     {
         if (config != null && !config.IsDisposed) { config.Activate(); return; }
         config = new Configuracoes(this);
-        config.FormClosed += (s, e) => { config = null; GC.Collect(); };
+        config.FormClosed += (s, e) => { config = null; ApararDepois(1000); };
         config.Show();
         config.Activate();
+    }
+
+    // devolve ao Windows a memoria que nao esta mais em uso (igual Sintonia e Volt);
+    // so roda depois de abrir/fechar algo, nunca em ciclo
+    [DllImport("kernel32.dll")] static extern bool SetProcessWorkingSetSize(IntPtr h, IntPtr min, IntPtr max);
+    System.Windows.Forms.Timer tAparar;
+    void ApararDepois(int ms)
+    {
+        if (tAparar == null)
+        {
+            tAparar = new System.Windows.Forms.Timer();
+            tAparar.Tick += (s, e) =>
+            {
+                tAparar.Stop();
+                if (menuAberto) return;
+                GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+                try { SetProcessWorkingSetSize(Process.GetCurrentProcess().Handle, new IntPtr(-1), new IntPtr(-1)); } catch { }
+            };
+        }
+        tAparar.Stop(); tAparar.Interval = ms; tAparar.Start();
     }
 
     void Sair()
