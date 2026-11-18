@@ -6,7 +6,7 @@
 
 <p align="center">
   Apaga o seu monitor OLED quando ele fica sem uso, <b>mesmo que você continue usando o outro monitor</b>.<br>
-  Leve, simples e sem instalação, para Windows 10 e 11.
+  Leve e simples, para Windows 10 e 11.
 </p>
 
 ---
@@ -32,15 +32,18 @@ No OLED, preto é **pixel desligado**, então a tela preta do programa equivale 
 - **Esconde o ponteiro do mouse** parado em cima do OLED (opcional).
 - **Contador de proteção:** quanto tempo cada monitor ficou apagado hoje.
 - **Pausar** por 15 min, 30 min, 1 h, 2 h ou até você retomar.
+- **Janela de configurações** no estilo do Windows 11 (Geral, Monitores, Comportamento), com as mesmas opções do menu do ícone.
 - Menu com **tema claro/escuro** que segue o Windows.
+- **Instala e desinstala sozinho**, sem administrador; aparece no menu Iniciar e em *Configurações ▸ Aplicativos*.
 - Funciona com monitores em **escalas diferentes** (ex.: 100% e 175%).
 
 ## Como instalar
 
 1. Baixe o **`OledDescanso.exe`** na página de [**Releases**](../../releases/latest).
-2. Coloque o arquivo numa pasta fixa, por exemplo `C:\Users\<você>\AppData\Local\Programs\OledDescanso\`.
-3. Dê dois cliques nele. O ícone 🌙 aparece perto do relógio.
-4. Clique com o **botão direito** no ícone para configurar. Para abrir junto com o Windows, marque **Configurações ▸ Iniciar com o Windows**.
+2. Abra. Ele pergunta se quer instalar: clique em **Instalar**. Pronto: ele fica em `%LOCALAPPDATA%\Programs\OledDescanso` e aparece em *Configurações ▸ Aplicativos*. O ícone 🌙 aparece perto do relógio.
+3. Clique com o **botão direito** no ícone para usar e configurar, ou em **Configurações…** para abrir a janela com todas as opções (abrir o programa de novo também abre essa janela). Para abrir junto com o Windows, ligue **Iniciar com o Windows**.
+
+Para desinstalar: *Configurações do Windows ▸ Aplicativos ▸ OLED Descanso ▸ Desinstalar* (ou o botão nas configurações do próprio programa). Os monitores voltam ao normal e não fica nada no sistema.
 
 > **Aviso do Windows (SmartScreen):** como o programa é novo e não tem assinatura digital paga, o Windows pode mostrar *"O Windows protegeu o computador"*. Clique em **Mais informações ▸ Executar assim mesmo**.
 >
@@ -57,6 +60,7 @@ Requisitos: Windows 10 ou 11 (o .NET Framework 4.8 necessário já vem no Window
 | **Monitores** ▸ *monitor* | Liga/desliga o apagar daquele monitor, escolhe o tempo e o "desligar de verdade" |
 | **Comportamento** ▸ | Esmaecer, regras de vídeo, limite sem uso, esconder mouse |
 | **Configurações** ▸ | Trocar atalho, contador, iniciar com o Windows, atalho no menu Iniciar, tema |
+| **Configurações…** | Abre a janela com todas as opções (Geral, Monitores, Comportamento) |
 
 Para acordar um monitor apagado: **mexa o mouse nele** ou aperte o atalho de novo.
 

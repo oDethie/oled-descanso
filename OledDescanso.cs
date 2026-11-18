@@ -1,7 +1,9 @@
 ﻿// OledDescanso - apaga (tela preta) o monitor OLED quando ele fica sem uso,
 // mesmo que voce continue usando o outro monitor.
 using System;
+using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -14,13 +16,16 @@ using System.Reflection;
 [assembly: AssemblyProduct("OLED Descanso")]
 [assembly: AssemblyDescription("Apaga o monitor OLED quando ele fica sem uso")]
 [assembly: AssemblyCopyright("Licença MIT")]
-[assembly: AssemblyVersion("1.0.2.0")]
-[assembly: AssemblyFileVersion("1.0.2.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 static class Program
 {
     [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr v);
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern uint RegisterWindowMessage(string s);
 
     [STAThread]
     static void Main(string[] args)
@@ -30,10 +35,24 @@ static class Program
         catch { try { SetProcessDPIAware(); } catch { } }
 
         if (args.Length == 2 && args[0] == "--ico") { Icone.SalvarIco(args[1]); return; }
+        if (args.Length == 2 && args[0] == "--logo") { using (var b = Icone.Desenhar(256, false)) b.Save(args[1]); return; }
+        if (args.Length == 1 && args[0] == "--desinstalar") { Application.EnableVisualStyles(); Instalador.Desinstalar(); return; }
+        // aberto de fora da pasta de programas (ex.: Downloads): oferece instalar
+        if (args.Length == 0 && !Instalador.EstaInstalado)
+        {
+            Application.EnableVisualStyles();
+            if (!Instalador.Oferecer(Instalador.TemaEscuroSistema())) return;
+        }
         bool novo;
         using (var m = new System.Threading.Mutex(true, "OledDescanso_Unico", out novo))
         {
-            if (!novo) return; // ja esta rodando
+            if (!novo)
+            {
+                // ja esta rodando: abre a janela de configuracoes da copia aberta
+                AllowSetForegroundWindow(-1);
+                PostMessage(new IntPtr(0xFFFF), RegisterWindowMessage("OledDescanso_Abrir"), IntPtr.Zero, IntPtr.Zero);
+                return;
+            }
             // prioridade baixa: jogos e outros programas sempre tem preferencia
             try { System.Diagnostics.Process.GetCurrentProcess().PriorityClass =
                     System.Diagnostics.ProcessPriorityClass.BelowNormal; } catch { }
@@ -50,35 +69,44 @@ static class Icone
 
     public static Bitmap Desenhar(int n, bool pausado)
     {
+        // monitor com tela azul-noite, lua crescente e estrelas (grade 64x64). Pausado: tudo cinza, sem estrelas.
         var bmp = new Bitmap(n, n, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bmp))
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-            float u = n / 32f; // desenho em grade 32x32
-
-            var moldura = Color.FromArgb(225, 230, 240);
-            var tela = Color.FromArgb(14, 16, 26);
-            var lua = pausado ? Color.FromArgb(140, 146, 158) : Color.FromArgb(255, 200, 70);
-
-            // pe do monitor
-            using (var b = new SolidBrush(moldura))
+            float u = n / 64f;
+            var moldura = pausado ? Color.FromArgb(130, 134, 145) : Color.FromArgb(150, 160, 190);
+            var telaCima = pausado ? Color.FromArgb(48, 50, 58) : Color.FromArgb(40, 48, 90);
+            var telaBaixo = pausado ? Color.FromArgb(22, 23, 28) : Color.FromArgb(14, 16, 34);
+            var lua = pausado ? Color.FromArgb(150, 154, 165) : Color.FromArgb(255, 200, 80);
+            var rt = new RectangleF(4 * u, 8 * u, 56 * u, 38 * u);
+            using (var p = Caminho(rt, 7 * u))
             {
-                g.FillRectangle(b, 14 * u, 23 * u, 4 * u, 4 * u);
-                Arredondado(g, b, 9 * u, 26.5f * u, 14 * u, 3 * u, 1.5f * u);
+                using (var br = new System.Drawing.Drawing2D.LinearGradientBrush(new PointF(0, 8 * u), new PointF(0, 46 * u + 1), telaCima, telaBaixo)) g.FillPath(br, p);
+                using (var pn = new Pen(moldura, Math.Max(1f, 2.5f * u))) g.DrawPath(pn, p);
             }
-            // corpo + tela preta
-            using (var b = new SolidBrush(moldura)) Arredondado(g, b, 1 * u, 3 * u, 30 * u, 21 * u, 3.5f * u);
-            using (var b = new SolidBrush(tela)) Arredondado(g, b, 3 * u, 5 * u, 26 * u, 17 * u, 2 * u);
-
-            // lua crescente
-            using (var b = new SolidBrush(lua)) g.FillEllipse(b, 10 * u, 7 * u, 12 * u, 12 * u);
-            using (var b = new SolidBrush(tela)) g.FillEllipse(b, 14.5f * u, 5.5f * u, 11 * u, 11 * u);
-            // estrelinha
-            if (!pausado && n >= 24)
-                using (var b = new SolidBrush(lua)) g.FillEllipse(b, 22 * u, 8 * u, 2 * u, 2 * u);
+            // pe
+            using (var br = new SolidBrush(moldura))
+            {
+                g.FillRectangle(br, 29 * u, 46 * u, 6 * u, 6 * u);
+                using (var p = Caminho(new RectangleF(20 * u, 51 * u, 24 * u, 4.5f * u), 2.2f * u)) g.FillPath(br, p);
+            }
+            // lua crescente (o "recorte" usa a cor da tela)
+            using (var br = new SolidBrush(lua)) g.FillEllipse(br, 21 * u, 16 * u, 22 * u, 22 * u);
+            using (var br = new System.Drawing.Drawing2D.LinearGradientBrush(new PointF(0, 8 * u), new PointF(0, 46 * u + 1), telaCima, telaBaixo)) g.FillEllipse(br, 28 * u, 12 * u, 20 * u, 20 * u);
+            if (!pausado && n >= 20)
+                using (var br = new SolidBrush(lua)) { g.FillEllipse(br, 44 * u, 16 * u, 3 * u, 3 * u); g.FillEllipse(br, 48 * u, 26 * u, 2 * u, 2 * u); }
         }
         return bmp;
+    }
+
+    static System.Drawing.Drawing2D.GraphicsPath Caminho(RectangleF r, float raio)
+    {
+        var p = new System.Drawing.Drawing2D.GraphicsPath(); float d = raio * 2;
+        p.AddArc(r.X, r.Y, d, d, 180, 90); p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90); p.AddArc(r.X, r.Bottom - d, d, d, 90, 90); p.CloseFigure();
+        return p;
     }
 
     static void Arredondado(Graphics g, Brush b, float x, float y, float w, float h, float r)
@@ -946,6 +974,11 @@ class App : ApplicationContext
         atalho = new Atalho(AtalhoPressionado);
         AplicarAtalho(true);
 
+        // outra copia aberta (abre esta janela) e instalador/desinstalador (pede para fechar)
+        mensageiro = new Mensageiro(() => AbrirConfiguracoes(), () => Sair());
+        // instalado na pasta de programas: aparece em Configuracoes > Aplicativos
+        if (Instalador.EstaInstalado) System.Threading.ThreadPool.QueueUserWorkItem(_ => Instalador.GarantirRegistro());
+
         // Iniciar com o Windows: migra/atualiza em segundo plano (schtasks leva ~100 ms)
         System.Threading.ThreadPool.QueueUserWorkItem(_ => { try { ConferirInicio(); } catch { } });
 
@@ -1328,8 +1361,11 @@ class App : ApplicationContext
         menu.Items.Add(mConf);
 
         menu.Items.Add(new ToolStripSeparator());
+        var mJanela = new ToolStripMenuItem("Configurações…");
+        mJanela.Click += (s, e) => { menu.Close(); AbrirConfiguracoes(); };
+        menu.Items.Add(mJanela);
         var mSair = new ToolStripMenuItem("Sair");
-        mSair.Click += (s, e) => { PonteiroMouse.Mostrar(); EsconderTodas(); SalvarConfig(); icone.Visible = false; Application.Exit(); };
+        mSair.Click += (s, e) => Sair();
         menu.Items.Add(mSair);
 
         menu.Closing += (s, e) =>
@@ -1433,12 +1469,107 @@ class App : ApplicationContext
         icone.ContextMenuStrip = menu;
     }
 
+    // =================== para a janela de configuracoes ===================
+    // (mesmas opcoes e o mesmo arquivo do menu do icone: mudar num lugar vale no outro)
+    Mensageiro mensageiro;
+    Configuracoes config;
+    public bool MenuLateralAberto = true;
+    public bool Animacoes { get { return true; } set { } }
+    public string Tema { get { return tema; } set { tema = value; SalvarConfig(); } }
+    public void PainelMudou() { }
+    public void ConferirPainel() { }
+
+    public void AbrirConfiguracoes()
+    {
+        if (config != null && !config.IsDisposed) { config.Activate(); return; }
+        config = new Configuracoes(this);
+        config.FormClosed += (s, e) => { config = null; GC.Collect(); };
+        config.Show();
+        config.Activate();
+    }
+
+    void Sair()
+    {
+        PonteiroMouse.Mostrar(); EsconderTodas(); SalvarConfig(); icone.Visible = false; Application.Exit();
+    }
+
+    public class InfoMonitor { public string Chave, Nome; public bool Principal; public Rectangle Area; }
+    public List<InfoMonitor> Monitores()
+    {
+        var l = new List<InfoMonitor>();
+        var telas = new List<Screen>(Screen.AllScreens);
+        telas.Sort((a, b) => b.Primary.CompareTo(a.Primary));
+        foreach (var t in telas)
+            l.Add(new InfoMonitor { Chave = Chave(t), Nome = NomeMonitor(t.DeviceName) ?? t.DeviceName.Replace(@"\\.\", ""), Principal = t.Primary, Area = t.Bounds });
+        return l;
+    }
+    public bool Apaga(string k) { return escolhidos.Contains(k); }
+    public void AlternarApagar(string k) { if (!escolhidos.Remove(k)) escolhidos.Add(k); SalvarConfig(); Atualizar(); }
+    public int Tempo(string k) { return TempoDe(k); }
+    public void DefinirTempo(string k, int v) { tempos[k] = v; SalvarConfig(); Atualizar(); }
+    public bool Desliga(string k) { return ddcMonitores.Contains(k); }
+    public void AlternarDesligar(InfoMonitor m)
+    {
+        if (!ddcMonitores.Remove(m.Chave)) ddcMonitores.Add(m.Chave);
+        else if (ddcDesligado.Remove(m.Chave)) Ddc(m.Area, 1);    // desligou a opcao: acorda se estava em espera
+        SalvarConfig();
+    }
+    public static string TextoTempo(int seg) { return Texto(seg); }
+    public string ApagadoHoje(string k) { double v; apagadoHoje.TryGetValue(k, out v); return Duracao(v); }
+
+    public bool Esmaecer { get { return esmaecer; } set { esmaecer = value; SalvarConfig(); } }
+    public bool ApagarComVideo { get { return !respeitarVideo; } set { respeitarVideo = !value; SalvarConfig(); } }
+    public bool DetectarFotos
+    {
+        get { return detectarFotos; }
+        set { detectarFotos = value; amostras.Clear(); ultimaMudanca.Clear(); ultimaAmostra.Clear(); SalvarConfig(); }
+    }
+    public int LimiteMin { get { return limiteMin; } set { limiteMin = value; SalvarConfig(); } }
+    public int MouseSegundos { get { return mouseSegundos; } set { mouseSegundos = value; mouseUltimoMov = DateTime.Now; SalvarConfig(); } }
+    public bool MostrarContador { get { return mostrarContador; } set { mostrarContador = value; SalvarConfig(); } }
+    public string AtalhoTexto { get { return TextoAtalho(atalhoMod, atalhoVk); } }
+    public void EscolherAtalho() { TrocarAtalho(); }
+    public bool Pausado { get { return pausado; } }
+    public string EstadoPausa { get { return !pausado ? "Ativo" : pausadoAte == DateTime.MaxValue ? "Pausado até você retomar" : "Pausado, volta em " + Restante(); } }
+    public void PausarPor(int minutos) { Pausar(minutos); }
+    public void ApagarJa() { ApagarAgora(); }
+    public bool IniciaComWindowsPub() { return IniciaComWindows(); }
+    public void AlternarInicioPub() { AlternarInicio(); }
+    public bool TemAtalhoIniciarPub() { return TemAtalhoIniciar(); }
+    public void AlternarAtalhoIniciarPub() { AlternarAtalhoIniciar(); }
+
+    public static float EscalaEm(Point p)
+    {
+        try { uint dx, dy; if (GetDpiForMonitor(MonitorFromPoint(p, 2), 0, out dx, out dy) == 0) return dx / 96f; } catch { }
+        return 1f;
+    }
+    public static Color CorDeDestaque(bool escuro)
+    {
+        try
+        {
+            using (var k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\DWM"))
+            {
+                object v = k == null ? null : k.GetValue("AccentColor");
+                if (v is int)
+                {
+                    int c = (int)v;
+                    var cor = Color.FromArgb(c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF);
+                    if (escuro) cor = Color.FromArgb(Math.Min(255, cor.R + (255 - cor.R) / 2), Math.Min(255, cor.G + (255 - cor.G) / 2), Math.Min(255, cor.B + (255 - cor.B) / 2));
+                    return cor;
+                }
+            }
+        }
+        catch { }
+        return escuro ? Color.FromArgb(76, 194, 255) : Color.FromArgb(0, 103, 192);
+    }
+    public static Color TextoSobre(Color c) { return (c.R * 0.299 + c.G * 0.587 + c.B * 0.114) > 150 ? Color.Black : Color.White; }
+
     // ---- Tema do menu: "auto" segue o Windows; "claro"/"escuro" fixos ----
     string tema = "auto";
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int val, int size);
     [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr hmon, int t, out uint x, out uint y);
 
-    bool TemaEscuro()
+    public bool TemaEscuro()
     {
         if (tema == "claro") return false;
         if (tema == "escuro") return true;
@@ -1465,7 +1596,7 @@ class App : ApplicationContext
         return 1f;
     }
 
-    void AplicarTema(ContextMenuStrip menu)
+    public void AplicarTema(ContextMenuStrip menu)
     {
         var r = new TemaMenu(TemaEscuro());
         ToolStripManager.Renderer = r;
@@ -1585,6 +1716,7 @@ class App : ApplicationContext
                 if (p[0] == "contador_dia") diaLido = p[1];
                 if (p[0] == "mouse") int.TryParse(p[1], out mouseSegundos);
                 if (p[0] == "tema" && (p[1] == "auto" || p[1] == "claro" || p[1] == "escuro")) tema = p[1];
+                if (p[0] == "menu_lateral") MenuLateralAberto = p[1] != "0";
                 if (p[0] == "atalho")
                 {
                     var a = p[1].Split(',');
@@ -1610,11 +1742,12 @@ class App : ApplicationContext
         if (ddcAntigo && ddcMonitores.Count == 0) foreach (var k in escolhidos) ddcMonitores.Add(k);
     }
 
-    void SalvarConfig()
+    public void SalvarConfig()
     {
         try
         {
             var linhas = new List<string> {
+                "menu_lateral=" + (MenuLateralAberto ? "1" : "0"),
                 "monitores=" + string.Join(";", escolhidos),
                 "segundos=" + segundos,
                 "video=" + (respeitarVideo ? "1" : "0"),
@@ -1765,3 +1898,870 @@ class App : ApplicationContext
         inicioCache = null;
     }
 }
+
+// =====================================================================
+//  Desenho: icones com a fonte de simbolos do Windows (mesmos do sistema)
+// =====================================================================
+// "Clicar de novo fecha": se o clique que fechou um menu caiu no mesmo lugar que o abriu,
+// nao abre de novo
+static class Alterna
+{
+    static string chave;
+    static DateTime quando;
+    public static bool PodeAbrir(string k) { return !(k == chave && (DateTime.Now - quando).TotalMilliseconds < 450); }
+    public static void Fechou(string k) { chave = k; quando = DateTime.Now; if (abertaChave == k) { aberto = null; abertaChave = null; } }
+
+    // Menu aberto agora: um clique (ou clique duplo) no mesmo lugar fecha em vez de abrir outro
+    static ToolStripDropDown aberto;
+    static string abertaChave;
+    public static void Abriu(string k, ToolStripDropDown m) { aberto = m; abertaChave = k; }
+    public static bool FecharSeAberto(string k)
+    {
+        if (aberto != null && abertaChave == k && aberto.Visible) { aberto.Close(); return true; }
+        return false;
+    }
+}
+
+// Ajudantes de desenho usados pelas janelas
+static class Desenho
+{
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
+    static string fonte;
+    public static string FonteIcones
+    {
+        get
+        {
+            if (fonte == null)
+            {
+                fonte = "Segoe MDL2 Assets";
+                try { using (var f = new Font("Segoe Fluent Icons", 10f)) if (f.Name == "Segoe Fluent Icons") fonte = f.Name; } catch { }
+            }
+            return fonte;
+        }
+    }
+    public static System.Drawing.Drawing2D.GraphicsPath Arred(RectangleF r, float raio)
+    {
+        var p = new System.Drawing.Drawing2D.GraphicsPath();
+        float d = Math.Min(raio * 2, Math.Min(r.Width, r.Height));
+        if (d <= 0.5f) { p.AddRectangle(r); return p; }
+        p.AddArc(r.X, r.Y, d, d, 180, 90); p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90); p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
+    }
+    public static Icon IconeDe(Bitmap bmp)
+    {
+        IntPtr h = bmp.GetHicon();
+        var ic = (Icon)Icon.FromHandle(h).Clone();
+        DestroyIcon(h);
+        return ic;
+    }
+    public static Bitmap Logo(int n) { return Icone.Desenhar(n, false); }
+}
+
+// Base das janelinhas (atalho, nome): paleta do Windows 11 e escala do monitor
+class JanelaBase : Form
+{
+    [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr hmon, int t, out uint x, out uint y);
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(Point p, uint f);
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int val, int size);
+
+    protected readonly float esc;
+    protected readonly bool escuro;
+    protected readonly Color cFundo, cCartao, cBorda, cTexto, cFraco, cTecla, cTeclaBorda, cAcento, cTextoAcento, cOk, cAviso, cErro;
+    protected readonly Font fTitulo, fNormal, fPequena, fTecla;
+
+    protected int E(float v) { return (int)Math.Round(v * esc); }
+
+    public JanelaBase(bool temaEscuro)
+    {
+        escuro = temaEscuro;
+        esc = 1f;
+        try { uint dx, dy; if (GetDpiForMonitor(MonitorFromPoint(Cursor.Position, 2), 0, out dx, out dy) == 0) esc = dx / 96f; } catch { }
+        cFundo = escuro ? Color.FromArgb(32, 32, 32) : Color.FromArgb(243, 243, 243);
+        cCartao = escuro ? Color.FromArgb(43, 43, 43) : Color.FromArgb(251, 251, 251);
+        cBorda = escuro ? Color.FromArgb(58, 58, 58) : Color.FromArgb(229, 229, 229);
+        cTexto = escuro ? Color.FromArgb(242, 242, 242) : Color.FromArgb(27, 27, 27);
+        cFraco = escuro ? Color.FromArgb(160, 160, 160) : Color.FromArgb(96, 96, 96);
+        cTecla = escuro ? Color.FromArgb(58, 58, 58) : Color.White;
+        cTeclaBorda = escuro ? Color.FromArgb(85, 85, 85) : Color.FromArgb(200, 200, 200);
+        cAcento = App.CorDeDestaque(escuro);
+        cTextoAcento = App.TextoSobre(cAcento);
+        cOk = escuro ? Color.FromArgb(108, 203, 95) : Color.FromArgb(15, 123, 15);
+        cAviso = escuro ? Color.FromArgb(252, 225, 0) : Color.FromArgb(157, 93, 0);
+        cErro = escuro ? Color.FromArgb(255, 153, 164) : Color.FromArgb(196, 43, 28);
+        fTitulo = new Font("Segoe UI Semibold", 14f * esc);
+        fNormal = new Font("Segoe UI", 10f * esc);
+        fPequena = new Font("Segoe UI", 9f * esc);
+        fTecla = new Font("Segoe UI Semibold", 13f * esc);
+
+        Text = "Volt";
+        using (var b = Desenho.Logo(32)) Icon = Desenho.IconeDe(b);
+        FormBorderStyle = FormBorderStyle.FixedSingle;
+        MaximizeBox = MinimizeBox = false;
+        ShowInTaskbar = true;
+        TopMost = true;
+        StartPosition = FormStartPosition.Manual;
+        AutoScaleMode = AutoScaleMode.None;
+        BackColor = cFundo;
+        ForeColor = cTexto;
+        Font = fNormal;
+        KeyPreview = true;
+    }
+
+    protected Button Botao(string texto, bool principal)
+    {
+        var b = new Button
+        {
+            Text = texto, Font = fNormal, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
+            Size = new Size(Math.Max(E(96), TextRenderer.MeasureText(texto, fNormal).Width + E(28)), E(34)),
+            BackColor = principal ? cAcento : cTecla, ForeColor = principal ? cTextoAcento : cTexto,
+            TabStop = false, UseVisualStyleBackColor = false
+        };
+        b.FlatAppearance.BorderColor = principal ? cAcento : cTeclaBorda;
+        b.FlatAppearance.BorderSize = 1;
+        b.FlatAppearance.MouseOverBackColor = principal ? ControlPaint.Light(cAcento, 0.15f) : (escuro ? Color.FromArgb(68, 68, 68) : Color.FromArgb(240, 240, 240));
+        b.FlatAppearance.MouseDownBackColor = principal ? ControlPaint.Dark(cAcento, 0.05f) : (escuro ? Color.FromArgb(52, 52, 52) : Color.FromArgb(230, 230, 230));
+        return b;
+    }
+
+    protected Panel Rodape()
+    {
+        var rodape = new Panel { Dock = DockStyle.Bottom, Height = E(64), BackColor = cCartao };
+        rodape.Paint += (s, e) => { using (var p = new Pen(cBorda)) e.Graphics.DrawLine(p, 0, 0, rodape.Width, 0); };
+        Controls.Add(rodape);
+        return rodape;
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        int sim = escuro ? 1 : 0, round = 2;
+        try { DwmSetWindowAttribute(Handle, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, ref sim, 4); } catch { }
+        try { DwmSetWindowAttribute(Handle, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/, ref round, 4); } catch { }
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        var a = Screen.FromPoint(Cursor.Position).WorkingArea; // abre no monitor onde esta o mouse
+        Location = new Point(a.X + (a.Width - Width) / 2, a.Y + (a.Height - Height) / 2);
+        Activate();
+    }
+}
+
+// =====================================================================
+//  Janela de Configuracoes (estilo Configuracoes do Windows 11)
+// =====================================================================
+class Configuracoes : Form
+{
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int val, int size);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int hh, uint f);
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int L, T, R, B; }
+
+    readonly App app;
+    float esc = 1f;
+    bool escuro;
+    Color cFundo, cCartao, cHover, cBorda, cTexto, cFraco, cAcento, cTextoAcento;
+    Font fTitulo, fNormal, fPequena, fCab, fGlifo, fGlifoP;
+    int pagina, rolagem, alturaConteudo;
+    float navAtual = -1f;                       // 0 = barra lateral fechada (so icones), 1 = aberta
+    readonly Timer tNav = new Timer { Interval = 15 };
+    static readonly string[] Paginas = { "Geral", "Monitores", "Comportamento" };
+    static readonly char[] GlifosPag = { '\uE713', '\uE7F4', '\uE945' };
+    readonly List<Linha> linhas = new List<Linha>();
+    readonly List<Zona> zonas = new List<Zona>();
+    Zona sobre;
+
+    class Linha
+    {
+        public int Tipo;
+        public string Titulo, Desc;
+        public char Glifo;
+        public Func<bool> Ler;
+        public Action<bool> Gravar;
+        public Func<string> Valor;
+        public Action<Rectangle> Clicar;
+    }
+    class Zona { public Rectangle R; public int Pagina = -1; public Linha L; }
+    const int L_CAB = 0, L_CHAVE = 1, L_BOTAO = 2, L_NOTA = 3, L_GRUPO = 4;
+
+    int E(float v) { return (int)Math.Round(v * esc); }
+
+    public void Atualizar() { Montar(); Invalidate(); }
+
+    public void IrPara(int p)
+    {
+        if (p < 0 || p >= Paginas.Length) return;
+        pagina = p; rolagem = 0; Montar(); Invalidate();
+    }
+
+    public Configuracoes(App a)
+    {
+        app = a;
+        Text = "Configurações do OLED Descanso";
+        using (var b = Desenho.Logo(32)) Icon = Desenho.IconeDe(b);
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MaximizeBox = false;
+        ShowInTaskbar = true;
+        StartPosition = FormStartPosition.Manual;
+        AutoScaleMode = AutoScaleMode.None;
+        KeyPreview = true;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        var p = Cursor.Position;
+        esc = App.EscalaEm(p);
+        Preparar();
+        var area = Screen.FromPoint(p).WorkingArea;
+        int w = Math.Min(area.Width - E(40), E(860)), h = Math.Min(area.Height - E(40), E(620));
+        Bounds = new Rectangle(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h);
+        MinimumSize = new Size(E(640), E(420));
+        Montar();
+    }
+
+    void Preparar()
+    {
+        escuro = app.TemaEscuro();
+        cFundo = escuro ? Color.FromArgb(32, 32, 32) : Color.FromArgb(243, 243, 243);
+        cCartao = escuro ? Color.FromArgb(43, 43, 43) : Color.FromArgb(251, 251, 251);
+        cHover = escuro ? Color.FromArgb(50, 50, 50) : Color.FromArgb(246, 246, 246);
+        cBorda = escuro ? Color.FromArgb(29, 29, 29) : Color.FromArgb(229, 229, 229);
+        cTexto = escuro ? Color.FromArgb(242, 242, 242) : Color.FromArgb(27, 27, 27);
+        cFraco = escuro ? Color.FromArgb(160, 160, 160) : Color.FromArgb(96, 96, 96);
+        cAcento = App.CorDeDestaque(escuro);
+        cTextoAcento = App.TextoSobre(cAcento);
+        if (fTitulo != null) foreach (var f in new[] { fTitulo, fNormal, fPequena, fCab, fGlifo, fGlifoP }) f.Dispose();
+        fTitulo = new Font("Segoe UI Semibold", E(28), GraphicsUnit.Pixel);
+        fNormal = new Font("Segoe UI", E(14), GraphicsUnit.Pixel);
+        fPequena = new Font("Segoe UI", E(12), GraphicsUnit.Pixel);
+        fCab = new Font("Segoe UI Semibold", E(14), GraphicsUnit.Pixel);
+        fGlifo = new Font(Desenho.FonteIcones, E(16), GraphicsUnit.Pixel);
+        fGlifoP = new Font(Desenho.FonteIcones, E(12), GraphicsUnit.Pixel);
+        BackColor = cFundo;
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        int sim = escuro ? 1 : 0, round = 2;
+        try { DwmSetWindowAttribute(Handle, 20, ref sim, 4); } catch { }
+        try { DwmSetWindowAttribute(Handle, 33, ref round, 4); } catch { }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == 0x02E0 /*WM_DPICHANGED*/)
+        {
+            esc = (m.WParam.ToInt32() & 0xFFFF) / 96f;
+            var r = (RECT)Marshal.PtrToStructure(m.LParam, typeof(RECT));
+            Preparar();
+            SetWindowPos(Handle, IntPtr.Zero, r.L, r.T, r.R - r.L, r.B - r.T, 0x0014);
+            Invalidate();
+            m.Result = IntPtr.Zero;
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys k)
+    {
+        if (k == Keys.Escape) { Close(); return true; }
+        return base.ProcessCmdKey(ref msg, k);
+    }
+
+    // ---------------- conteudo de cada pagina ----------------
+    void Cab(string t) { linhas.Add(new Linha { Tipo = L_CAB, Titulo = t }); }
+    // titulo de grupo que abre/fecha (seta a direita)
+    void Grupo(string t, bool aberto, Action alternar)
+    {
+        linhas.Add(new Linha { Tipo = L_GRUPO, Titulo = t, Ler = () => aberto, Clicar = r => alternar() });
+    }
+    void Nota(string t) { linhas.Add(new Linha { Tipo = L_NOTA, Titulo = t }); }
+    void Chave(string t, string d, Func<bool> ler, Action<bool> gravar)
+    {
+        linhas.Add(new Linha { Tipo = L_CHAVE, Titulo = t, Desc = d, Ler = ler, Gravar = gravar });
+    }
+    void Botao(string t, string d, Func<string> valor, Action<Rectangle> clicar, char glifo = '\0')
+    {
+        linhas.Add(new Linha { Tipo = L_BOTAO, Titulo = t, Desc = d, Valor = valor, Clicar = clicar, Glifo = glifo });
+    }
+
+    ContextMenuStrip NovoMenu()
+    {
+        return new ContextMenuStrip { ShowImageMargin = false, ShowCheckMargin = true };
+    }
+
+    void MostrarMenu(ContextMenuStrip m, Rectangle r)
+    {
+        string chave = "cfg|" + pagina + "|" + (r.Y + rolagem);
+        if (Alterna.FecharSeAberto(chave) || !Alterna.PodeAbrir(chave)) { m.Dispose(); return; } // o mesmo clique que fechou
+        app.AplicarTema(m);
+        m.Closed += (s, e) => { Alterna.Fechou(chave); Montar(); Invalidate(); };
+        Alterna.Abriu(chave, m);
+        m.Show(this, new Point(r.Right - E(12), r.Bottom - E(4)), ToolStripDropDownDirection.BelowLeft);
+    }
+
+    void Montar()
+    {
+        linhas.Clear();
+        if (pagina == 0)
+        {
+            Nota("Apaga o seu monitor OLED quando ele fica sem uso, mesmo que você continue usando o outro monitor. Estas são as mesmas opções do menu do ícone.");
+            Cab("Agora");
+            Botao("Apagar agora", "Apaga na hora os monitores marcados. Para voltar, mexa o mouse neles ou aperte o atalho de novo", () => app.AtalhoTexto == "nenhum" ? "" : app.AtalhoTexto,
+                r => app.ApagarJa(), '\uE708');
+            Botao("Pausar", "Para de apagar por um tempo. Dois cliques no ícone também pausam e retomam", () => app.EstadoPausa, r =>
+            {
+                var m = NovoMenu();
+                if (app.Pausado) { var ret = new ToolStripMenuItem("Retomar agora"); ret.Click += (s, e) => app.PausarPor(0); m.Items.Add(ret); m.Items.Add(new ToolStripSeparator()); }
+                foreach (var min in new[] { 15, 30, 60, 120 })
+                {
+                    int v = min;
+                    var it = new ToolStripMenuItem(v < 60 ? v + " min" : (v / 60) + " h");
+                    it.Click += (s, e) => app.PausarPor(v);
+                    m.Items.Add(it);
+                }
+                var sem = new ToolStripMenuItem("Até eu retomar"); sem.Click += (s, e) => app.PausarPor(-1); m.Items.Add(sem);
+                MostrarMenu(m, r);
+            });
+
+            Cab("Contador de proteção");
+            Chave("Mostrar no menu do ícone", "Quanto tempo cada monitor ficou apagado hoje", () => app.MostrarContador, v => app.MostrarContador = v);
+            foreach (var mon in app.Monitores())
+                if (app.Apaga(mon.Chave)) Botao(mon.Nome, "Apagado hoje", () => app.ApagadoHoje(mon.Chave), r => { }, '\uE7F4');
+
+            Cab("Atalho e sistema");
+            Botao("Atalho para apagar agora", "Funciona em qualquer lugar. Aperte de novo para voltar", () => app.AtalhoTexto,
+                r => BeginInvoke(new Action(() => { app.EscolherAtalho(); Montar(); Invalidate(); })));
+            Chave("Iniciar com o Windows", "Abre o OLED Descanso sozinho quando você entra no Windows", () => app.IniciaComWindowsPub(), v => app.AlternarInicioPub());
+            Chave("Atalho no menu Iniciar", "Para achar pesquisando \"OLED Descanso\"", () => app.TemAtalhoIniciarPub(), v => app.AlternarAtalhoIniciarPub());
+            Botao("Tema", "Claro, escuro ou igual ao Windows, nos menus e nesta janela", () => app.Tema == "claro" ? "Claro" : app.Tema == "escuro" ? "Escuro" : "Igual ao Windows", r =>
+            {
+                var m = NovoMenu();
+                foreach (var t in new[] { "auto", "claro", "escuro" })
+                {
+                    string v = t;
+                    var it = new ToolStripMenuItem(v == "auto" ? "Igual ao Windows" : v == "claro" ? "Claro" : "Escuro") { Checked = app.Tema == v };
+                    it.Click += (s, e) => { app.Tema = v; Preparar(); OnHandleCreated(EventArgs.Empty); };
+                    m.Items.Add(it);
+                }
+                MostrarMenu(m, r);
+            });
+            Botao("Desinstalar o OLED Descanso", "Remove o programa, o atalho, o início com o Windows e as configurações (pede confirmação)", () => "",
+                r => { try { System.Diagnostics.Process.Start(Application.ExecutablePath, "--desinstalar"); } catch { } });
+        }
+        else if (pagina == 1)
+        {
+            Nota("Cada monitor tem seu próprio tempo. Para acordar um monitor apagado, mexa o mouse nele ou aperte o atalho.");
+            foreach (var mon0 in app.Monitores())
+            {
+                var mon = mon0;
+                Cab(mon.Nome + (mon.Principal ? " (principal)" : ""));
+                Chave("Apagar este monitor", "Fica preto quando você não usa este monitor pelo tempo escolhido", () => app.Apaga(mon.Chave), v => app.AlternarApagar(mon.Chave));
+                if (!app.Apaga(mon.Chave)) continue;
+                Botao("Tempo para apagar", "Sem usar este monitor por este tempo, ele apaga", () => App.TextoTempo(app.Tempo(mon.Chave)), r =>
+                {
+                    var m = NovoMenu();
+                    foreach (var seg in new[] { 15, 30, 60, 120, 300, 600 })
+                    {
+                        int v = seg;
+                        var it = new ToolStripMenuItem(App.TextoTempo(v)) { Checked = app.Tempo(mon.Chave) == v };
+                        it.Click += (s, e) => app.DefinirTempo(mon.Chave, v);
+                        m.Items.Add(it);
+                    }
+                    MostrarMenu(m, r);
+                });
+                Chave("Desligar de verdade (espera)", "Além da tela preta, manda o monitor para o modo de espera (DDC/CI). Nem todo monitor aceita",
+                    () => app.Desliga(mon.Chave), v => app.AlternarDesligar(mon));
+            }
+        }
+        else
+        {
+            Cab("Ao apagar");
+            Chave("Esmaecer suavemente", "Escurece aos poucos em vez de cortar de uma vez", () => app.Esmaecer, v => app.Esmaecer = v);
+            Botao("Esconder o mouse parado", "Esconde o ponteiro parado em cima de um monitor marcado", () => app.MouseSegundos == 0 ? "Desligado" : App.TextoTempo(app.MouseSegundos), r =>
+            {
+                var m = NovoMenu();
+                foreach (var seg in new[] { 0, 5, 10, 30, 60, 300 })
+                {
+                    int v = seg;
+                    var it = new ToolStripMenuItem(v == 0 ? "Desligado" : App.TextoTempo(v)) { Checked = app.MouseSegundos == v };
+                    it.Click += (s, e) => app.MouseSegundos = v;
+                    m.Items.Add(it);
+                }
+                MostrarMenu(m, r);
+            });
+
+            Cab("Vídeos e jogos");
+            Nota("Por padrão não apaga o monitor onde um vídeo está tocando, nem enquanto você joga em tela cheia (inclusive só com controle).");
+            Chave("Apagar mesmo com vídeo tocando", "Ignora os vídeos e apaga pelo tempo normal", () => app.ApagarComVideo, v => app.ApagarComVideo = v);
+            Chave("Detectar o monitor do vídeo (fotos)", "Compara imagens minúsculas da tela (64×36, só na memória) para saber em qual monitor o vídeo está. Desligado, qualquer vídeo segura todos os monitores",
+                () => app.DetectarFotos, v => app.DetectarFotos = v);
+            Botao("Limite sem uso", "Se ninguém mexer no PC por este tempo, apaga mesmo com vídeo (útil se dormir com uma playlist)", () => app.LimiteMin == 0 ? "Desligado" : app.LimiteMin < 60 ? app.LimiteMin + " min" : (app.LimiteMin / 60) + " h", r =>
+            {
+                var m = NovoMenu();
+                foreach (var min in new[] { 0, 30, 60, 120, 180 })
+                {
+                    int v = min;
+                    var it = new ToolStripMenuItem(v == 0 ? "Desligado" : v < 60 ? v + " min" : (v / 60) + " h") { Checked = app.LimiteMin == v };
+                    it.Click += (s, e) => app.LimiteMin = v;
+                    m.Items.Add(it);
+                }
+                MostrarMenu(m, r);
+            });
+        }
+    }
+
+    static void Abrir(string cmd) { try { Process.Start(cmd); } catch { } }
+
+    // ---------------- desenho ----------------
+    const TextFormatFlags TF = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis |
+                               TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding;
+    const TextFormatFlags TC = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine;
+
+    void Fundo(Graphics g, Rectangle r, Color c, int raio, Color? borda)
+    {
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var p = Desenho.Arred(new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1), raio))
+        {
+            using (var b = new SolidBrush(c)) g.FillPath(b, p);
+            if (borda.HasValue) using (var pn = new Pen(borda.Value)) g.DrawPath(pn, p);
+        }
+        g.SmoothingMode = SmoothingMode.None;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.Clear(cFundo);
+        zonas.Clear();
+        if (navAtual < 0) navAtual = app.MenuLateralAberto ? 1f : 0f;
+        int navW = E(56) + (int)Math.Round((E(240) - E(56)) * navAtual);
+        bool comNomes = navAtual > 0.5f;
+
+        // Navegacao (esquerda): botao de abrir/fechar + paginas
+        int y = E(12);
+        var rMenu = new Rectangle(E(8), y, E(40), E(36));
+        zonas.Add(new Zona { R = rMenu, Pagina = -2 });
+        if (sobre != null && sobre.Pagina == -2) Fundo(g, rMenu, cHover, E(5), null);
+        TextRenderer.DrawText(g, "\uE700", fGlifo, rMenu, cTexto, TC);
+        if (comNomes)
+        {
+            using (var logo = Desenho.Logo(E(20))) g.DrawImage(logo, E(58), y + E(8));
+            TextRenderer.DrawText(g, "OLED Descanso", fCab, new Rectangle(E(86), y, navW - E(90), E(36)), cTexto, TF);
+        }
+        y += E(52);
+        for (int i = 0; i < Paginas.Length; i++)
+        {
+            var r = new Rectangle(E(8), y, navW - E(16), E(40));
+            zonas.Add(new Zona { R = r, Pagina = i });
+            bool sel = i == pagina, hov = sobre != null && sobre.Pagina == i;
+            if (sel || hov) Fundo(g, r, sel ? (escuro ? Color.FromArgb(45, 45, 45) : Color.FromArgb(234, 234, 234)) : cHover, E(5), null);
+            if (sel) Fundo(g, new Rectangle(r.X, r.Y + E(12), E(3), E(16)), cAcento, E(1), null);
+            TextRenderer.DrawText(g, GlifosPag[i].ToString(), fGlifo, new Rectangle(r.X + E(8), r.Y, E(24), r.Height), cTexto, TC);
+            if (comNomes && r.Width - E(56) > E(30))
+                TextRenderer.DrawText(g, Paginas[i], fNormal, new Rectangle(r.X + E(44), r.Y, r.Width - E(52), r.Height), cTexto, TF);
+            y += E(44);
+        }
+
+        // Conteudo (direita)
+        int x0 = navW + E(16), w = ClientSize.Width - x0 - E(28);
+        var reg = g.Clip;
+        g.SetClip(new Rectangle(navW, 0, ClientSize.Width - navW, ClientSize.Height));
+        y = E(20) - rolagem;
+        TextRenderer.DrawText(g, Paginas[pagina], fTitulo, new Rectangle(x0, y, w, E(44)), cTexto, TF);
+        y += E(60);
+        foreach (var l in linhas)
+        {
+            if (l.Tipo == L_GRUPO)
+            {
+                y += E(10);
+                var rg = new Rectangle(x0 - E(6), y, w + E(12), E(36));
+                zonas.Add(new Zona { R = rg, L = l });
+                if (sobre != null && sobre.L == l) Fundo(g, rg, cHover, E(5), null);
+                TextRenderer.DrawText(g, l.Titulo, fCab, new Rectangle(x0 + E(2), y, w - E(40), rg.Height), cTexto, TF);
+                TextRenderer.DrawText(g, (l.Ler() ? '\uE70E' : '\uE70D').ToString(), fGlifoP,
+                    new Rectangle(rg.Right - E(36), y, E(28), rg.Height), cFraco, TC);
+                y += E(40);
+                continue;
+            }
+            if (l.Tipo == L_CAB)
+            {
+                y += E(14);
+                TextRenderer.DrawText(g, l.Titulo, fCab, new Rectangle(x0 + E(2), y, w, E(26)), cTexto, TF);
+                y += E(32);
+                continue;
+            }
+            if (l.Tipo == L_NOTA)
+            {
+                var tam = TextRenderer.MeasureText(g, l.Titulo, fNormal, new Size(w, 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+                TextRenderer.DrawText(g, l.Titulo, fNormal, new Rectangle(x0 + E(2), y, w, tam.Height + E(4)), cFraco,
+                    TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                y += tam.Height + E(16);
+                continue;
+            }
+            // a explicacao quebra em mais linhas quando precisa (o cartao cresce junto)
+            int txPre = l.Glifo != '\0' ? x0 + E(54) : x0 + E(20);
+            int descW = Math.Max(E(80), w - (txPre - x0) - E(200));
+            int descH = l.Desc == null ? 0 : TextRenderer.MeasureText(g, l.Desc, fPequena, new Size(descW, 0),
+                TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Height;
+            int h = l.Desc != null ? E(50) + descH : E(54);
+            var r = new Rectangle(x0, y, w, h);
+            zonas.Add(new Zona { R = r, L = l });
+            bool hov = sobre != null && sobre.L == l;
+            Fundo(g, r, hov ? cHover : cCartao, E(6), cBorda);
+            int tx = x0 + E(20);
+            if (l.Glifo != '\0')
+            {
+                TextRenderer.DrawText(g, l.Glifo.ToString(), fGlifo, new Rectangle(x0 + E(14), y, E(28), h), cTexto, TC);
+                tx = x0 + E(54);
+            }
+            int dirW = E(200);
+            if (l.Desc != null)
+            {
+                TextRenderer.DrawText(g, l.Titulo, fNormal, new Rectangle(tx, y + E(13), w - (tx - x0) - dirW, E(22)), cTexto, TF);
+                TextRenderer.DrawText(g, l.Desc, fPequena, new Rectangle(tx, y + E(36), descW, descH + E(2)), cFraco,
+                    TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.Top);
+            }
+            else TextRenderer.DrawText(g, l.Titulo, fNormal, new Rectangle(tx, y, w - (tx - x0) - dirW, h), cTexto, TF);
+
+            if (l.Tipo == L_CHAVE)
+            {
+                bool on = l.Ler();
+                var rs = new Rectangle(r.Right - E(60), y + (h - E(20)) / 2, E(40), E(20));
+                Interruptor(g, rs, on, hov);
+                TextRenderer.DrawText(g, on ? "Ligado" : "Desligado", fNormal, new Rectangle(rs.Left - E(110), y, E(98), h), cTexto,
+                    TF & ~TextFormatFlags.Left | TextFormatFlags.Right);
+            }
+            else
+            {
+                char seta = l.Glifo == '' ? '' : '';
+                if (l.Glifo != '') TextRenderer.DrawText(g, seta.ToString(), fGlifoP, new Rectangle(r.Right - E(40), y, E(24), h), cFraco, TC);
+                string v = l.Valor();
+                if (v.Length > 0)
+                    TextRenderer.DrawText(g, v, fNormal, new Rectangle(r.Right - E(44) - dirW, y, dirW, h), cFraco,
+                        TF & ~TextFormatFlags.Left | TextFormatFlags.Right);
+            }
+            y += h + E(4);
+        }
+        alturaConteudo = y + rolagem + E(24);
+        g.Clip = reg;
+
+        if (alturaConteudo > ClientSize.Height)
+        {
+            float hb = Math.Max(E(30), ClientSize.Height * ClientSize.Height / (float)alturaConteudo);
+            float yb = (ClientSize.Height - hb) * rolagem / (float)(alturaConteudo - ClientSize.Height);
+            Fundo(g, new Rectangle(ClientSize.Width - E(8), (int)yb + E(4), E(4), (int)hb - E(8)), cFraco, E(2), null);
+        }
+    }
+
+    void Interruptor(Graphics g, Rectangle r, bool on, bool hov)
+    {
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        var rf = new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1);
+        using (var p = Desenho.Arred(rf, rf.Height / 2))
+        {
+            if (on) using (var b = new SolidBrush(cAcento)) g.FillPath(b, p);
+            else using (var pn = new Pen(cFraco)) g.DrawPath(pn, p);
+        }
+        float d = r.Height - E(hov ? 8 : 10);
+        float cx = on ? r.Right - r.Height / 2f : r.X + r.Height / 2f, cy = r.Y + r.Height / 2f;
+        using (var b = new SolidBrush(on ? cTextoAcento : cFraco)) g.FillEllipse(b, cx - d / 2, cy - d / 2, d, d);
+        g.SmoothingMode = SmoothingMode.None;
+    }
+
+    // ---------------- mouse ----------------
+    Zona ZonaEm(Point p)
+    {
+        foreach (var z in zonas) if (z.R.Contains(p)) return z;
+        return null;
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        var z = ZonaEm(e.Location);
+        bool mudou = (z == null) != (sobre == null) || (z != null && (z.L != sobre.L || z.Pagina != sobre.Pagina));
+        sobre = z;
+        if (mudou) { Cursor = z != null ? Cursors.Hand : Cursors.Default; Invalidate(); }
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        base.OnMouseLeave(e);
+        if (sobre != null) { sobre = null; Invalidate(); }
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        int max = Math.Max(0, alturaConteudo - ClientSize.Height);
+        rolagem = Math.Max(0, Math.Min(max, rolagem - e.Delta * E(48) / 120));
+        sobre = null;
+        Invalidate();
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        rolagem = Math.Max(0, Math.Min(rolagem, Math.Max(0, alturaConteudo - ClientSize.Height)));
+    }
+
+    protected override void OnMouseClick(MouseEventArgs e)
+    {
+        base.OnMouseClick(e);
+        if (e.Button != MouseButtons.Left) return;
+        var z = ZonaEm(e.Location);
+        if (z == null) return;
+        if (z.Pagina == -2)
+        {
+            app.MenuLateralAberto = !app.MenuLateralAberto;
+            app.SalvarConfig();
+            if (!app.Animacoes) { navAtual = app.MenuLateralAberto ? 1f : 0f; Invalidate(); return; }
+            if (!tNav.Enabled)
+            {
+                tNav.Tick -= PassoNav; tNav.Tick += PassoNav;
+                tNav.Start();
+            }
+            return;
+        }
+        if (z.Pagina >= 0) { pagina = z.Pagina; rolagem = 0; Montar(); Invalidate(); return; }
+        var l = z.L;
+        if (l.Tipo == L_CHAVE)
+        {
+            l.Gravar(!l.Ler());
+            app.SalvarConfig();
+            app.PainelMudou();
+            Montar();      // refaz a lista na hora (opcoes que dependem desta aparecem/somem)
+            sobre = null;
+            Invalidate();
+            return;
+        }
+        if ((l.Tipo == L_BOTAO || l.Tipo == L_GRUPO) && l.Clicar != null)
+        {
+            l.Clicar(z.R);
+            if (!IsDisposed) { Montar(); Invalidate(); }
+        }
+    }
+
+    void PassoNav(object s, EventArgs e)
+    {
+        float alvo = app.MenuLateralAberto ? 1f : 0f;
+        navAtual += (alvo - navAtual) * 0.3f;
+        if (Math.Abs(alvo - navAtual) < 0.02f) { navAtual = alvo; tNav.Stop(); }
+        Invalidate();
+    }
+
+    protected override void OnDeactivate(EventArgs e)
+    {
+        base.OnDeactivate(e);
+        app.ConferirPainel();
+    }
+
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        Montar(); // volta de uma janelinha (atalho, nome): mostra os valores novos
+        Invalidate();
+    }
+}
+
+// Janela invisivel: outra copia aberta pede para abrir as configuracoes; o instalador pede para fechar
+class Mensageiro : NativeWindow
+{
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern uint RegisterWindowMessage(string s);
+    readonly uint msgAbrir = RegisterWindowMessage("OledDescanso_Abrir"), msgSair = RegisterWindowMessage("OledDescanso_Sair");
+    readonly Action abrir, sair;
+    public Mensageiro(Action abrir, Action sair) { this.abrir = abrir; this.sair = sair; CreateHandle(new CreateParams { Caption = "OledDescanso.Mensageiro" }); }
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == (int)msgAbrir) abrir();
+        else if (m.Msg == (int)msgSair) sair();
+        base.WndProc(ref m);
+    }
+}
+
+static class Instalador
+{
+    static Version VersaoAtual { get { var v = Assembly.GetExecutingAssembly().GetName().Version; return new Version(v.Major, v.Minor, Math.Max(0, v.Build)); } }
+    public static bool TemaEscuroSistema()
+    {
+        try
+        {
+            using (var k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+            { object v = k == null ? null : k.GetValue("AppsUseLightTheme"); if (v is int) return (int)v == 0; }
+        }
+        catch { }
+        return false;
+    }
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern uint RegisterWindowMessage(string s);
+
+    public static string Pasta { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "OledDescanso"); } }
+    public static string ExeInstalado { get { return Path.Combine(Pasta, "OledDescanso.exe"); } }
+    static string Atalho { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "OLED Descanso.lnk"); } }
+    const string ChaveDesinstalar = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\OledDescanso";
+
+    public static bool EstaInstalado { get { return string.Equals(Path.GetFullPath(Application.ExecutablePath), Path.GetFullPath(ExeInstalado), StringComparison.OrdinalIgnoreCase); } }
+
+    // aberto de fora da pasta de instalacao (ex.: Downloads): oferece instalar. true = pode seguir abrindo este exe
+    public static bool Oferecer(bool escuro)
+    {
+        bool jaTem = File.Exists(ExeInstalado);
+        Version vNova = VersaoAtual, vVelha = null;
+        if (jaTem) try { var fv = FileVersionInfo.GetVersionInfo(ExeInstalado); vVelha = new Version(fv.FileMajorPart, fv.FileMinorPart, fv.FileBuildPart); } catch { }
+        string titulo = !jaTem ? "Instalar o OLED Descanso" : vVelha != null && vVelha < vNova ? "Atualizar o OLED Descanso" : "Reinstalar o OLED Descanso";
+        string texto = !jaTem
+            ? "Ele fica na sua pasta de programas, abre sozinho com o Windows e aparece no menu Iniciar. Não precisa de administrador."
+            : "O OLED Descanso já está instalado" + (vVelha != null ? " (versão " + vVelha.ToString(3) + ")" : "") + ". Instalar esta versão (" + vNova.ToString(3) + ") por cima? Suas configurações continuam.";
+        using (var f = new JanelaInstalar(titulo, texto, escuro))
+        {
+            var r = f.ShowDialog();
+            if (r == DialogResult.Cancel) return false;
+            if (r == DialogResult.No) return true;       // so abrir este, sem instalar
+        }
+        string erro = Instalar();
+        if (erro != null) { MessageBox.Show("Não deu para instalar o OLED Descanso:\n" + erro, "OLED Descanso", MessageBoxButtons.OK, MessageBoxIcon.Warning); return true; }
+        try { Process.Start(ExeInstalado); } catch { }
+        return false;
+    }
+
+    static void FecharAberto()
+    {
+        uint msg = RegisterWindowMessage("OledDescanso_Sair");
+        PostMessage(new IntPtr(0xFFFF), msg, IntPtr.Zero, IntPtr.Zero);
+        for (int i = 0; i < 50; i++)
+        {
+            bool aberto = false;
+            foreach (var p in Process.GetProcessesByName("OledDescanso")) if (p.Id != Process.GetCurrentProcess().Id) aberto = true;
+            if (!aberto) return;
+            System.Threading.Thread.Sleep(100);
+        }
+        foreach (var p in Process.GetProcessesByName("OledDescanso")) if (p.Id != Process.GetCurrentProcess().Id) try { p.Kill(); p.WaitForExit(3000); } catch { }
+    }
+
+    public static string Instalar()
+    {
+        try
+        {
+            FecharAberto();
+            Directory.CreateDirectory(Pasta);
+            File.Copy(Application.ExecutablePath, ExeInstalado, true);
+            CriarAtalho();
+            using (var k = Registry.CurrentUser.CreateSubKey(ChaveDesinstalar))
+            {
+                k.SetValue("DisplayName", "OLED Descanso");
+                k.SetValue("DisplayIcon", ExeInstalado + ",0");
+                k.SetValue("DisplayVersion", VersaoAtual.ToString(3));
+                k.SetValue("Publisher", "oDethie");
+                k.SetValue("InstallLocation", Pasta);
+                k.SetValue("UninstallString", "\"" + ExeInstalado + "\" --desinstalar");
+                k.SetValue("URLInfoAbout", "https://github.com/oDethie/oled-descanso");
+                k.SetValue("NoModify", 1, RegistryValueKind.DWord);
+                k.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+                k.SetValue("EstimatedSize", (int)Math.Max(1, new FileInfo(ExeInstalado).Length / 1024), RegistryValueKind.DWord);
+            }
+            return null;
+        }
+        catch (Exception ex) { return ex.Message; }
+    }
+
+    // ja instalado (ou atualizado sozinho): garante o atalho e o registro em Configuracoes > Aplicativos
+    public static void GarantirRegistro()
+    {
+        try
+        {
+            using (var k = Registry.CurrentUser.CreateSubKey(ChaveDesinstalar))
+            {
+                if (k.GetValue("DisplayVersion") as string == VersaoAtual.ToString(3) && k.GetValue("UninstallString") != null) return;
+                k.SetValue("DisplayName", "OLED Descanso");
+                k.SetValue("DisplayIcon", ExeInstalado + ",0");
+                k.SetValue("DisplayVersion", VersaoAtual.ToString(3));
+                k.SetValue("Publisher", "oDethie");
+                k.SetValue("InstallLocation", Pasta);
+                k.SetValue("UninstallString", "\"" + ExeInstalado + "\" --desinstalar");
+                k.SetValue("URLInfoAbout", "https://github.com/oDethie/oled-descanso");
+                k.SetValue("NoModify", 1, RegistryValueKind.DWord);
+                k.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+                k.SetValue("EstimatedSize", (int)Math.Max(1, new FileInfo(ExeInstalado).Length / 1024), RegistryValueKind.DWord);
+            }
+        }
+        catch { }
+    }
+
+    static void CriarAtalho()
+    {
+        var tipo = Type.GetTypeFromProgID("WScript.Shell");
+        object shell = Activator.CreateInstance(tipo);
+        object at = tipo.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { Atalho });
+        var ta = at.GetType();
+        ta.InvokeMember("TargetPath", BindingFlags.SetProperty, null, at, new object[] { ExeInstalado });
+        ta.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, at, new object[] { Pasta });
+        ta.InvokeMember("Description", BindingFlags.SetProperty, null, at, new object[] { "Apaga o monitor OLED quando ele fica sem uso" });
+        ta.InvokeMember("IconLocation", BindingFlags.SetProperty, null, at, new object[] { ExeInstalado + ",0" });
+        ta.InvokeMember("Save", BindingFlags.InvokeMethod, null, at, null);
+        Marshal.FinalReleaseComObject(at);
+        Marshal.FinalReleaseComObject(shell);
+    }
+
+    // OledDescanso.exe --desinstalar (tambem pelo Windows: Configuracoes > Aplicativos)
+    public static void Desinstalar()
+    {
+        if (MessageBox.Show("Desinstalar o OLED Descanso?\n\nRemove o programa, o atalho, o início com o Windows e as configurações. Os monitores voltam ao normal.",
+            "OLED Descanso", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        FecharAberto();
+        try { Process.Start(new ProcessStartInfo("schtasks.exe", "/delete /tn \"OLED Descanso\" /f") { CreateNoWindow = true, UseShellExecute = false }).WaitForExit(10000); } catch { }
+        try { File.Delete(Atalho); } catch { }
+        try { Registry.CurrentUser.DeleteSubKeyTree(ChaveDesinstalar, false); } catch { }
+        string dados = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        try { File.Delete(Path.Combine(dados, "OledDescanso.ini")); } catch { }
+        try { using (var k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true)) if (k != null) k.DeleteValue("OledDescanso", false); } catch { }
+        try
+        {
+            using (var k = Registry.CurrentUser.OpenSubKey(@"Control Panel\NotifyIconSettings", true))
+                if (k != null)
+                    foreach (var n in k.GetSubKeyNames())
+                    {
+                        string p; using (var s = k.OpenSubKey(n)) p = s == null ? null : s.GetValue("ExecutablePath") as string;
+                        if (p != null && p.EndsWith("\\OledDescanso.exe", StringComparison.OrdinalIgnoreCase)) k.DeleteSubKeyTree(n, false);
+                    }
+        }
+        catch { }
+        // a pasta do programa e apagada logo depois que este exe fechar
+        string pasta = Path.GetDirectoryName(Application.ExecutablePath);
+        if (string.Equals(pasta, Pasta, StringComparison.OrdinalIgnoreCase))
+            try
+            {
+                Process.Start(new ProcessStartInfo("cmd.exe", "/c ping 127.0.0.1 -n 3 > nul & rmdir /s /q \"" + pasta + "\"")
+                { CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden });
+            }
+            catch { }
+        MessageBox.Show("O OLED Descanso foi desinstalado.", "OLED Descanso", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+}
+
+// janela "Instalar o OLED Descanso" no estilo do Windows 11
+class JanelaInstalar : JanelaBase
+{
+    public JanelaInstalar(string titulo, string texto, bool temaEscuro) : base(temaEscuro)
+    {
+        Text = "OLED Descanso";
+        ClientSize = new Size(E(460), E(220));
+        int x = E(24), w = ClientSize.Width - E(48), y = E(22);
+        var logo = new PictureBox { Image = Desenho.Logo(E(40)), Size = new Size(E(40), E(40)), Location = new Point(x, y) };
+        Controls.Add(logo);
+        Controls.Add(new Label { Text = titulo, Font = fTitulo, AutoSize = true, Location = new Point(x + E(52), y + E(4)), ForeColor = cTexto });
+        y += E(56);
+        Controls.Add(new Label { Text = texto, Font = fNormal, AutoSize = false, Size = new Size(w, E(64)), Location = new Point(x, y), ForeColor = cFraco });
+        var rodape = Rodape();
+        var bInstalar = Botao(titulo.StartsWith("Instalar") ? "Instalar" : titulo.StartsWith("Atualizar") ? "Atualizar" : "Reinstalar", true);
+        var bAbrir = Botao("Só abrir", false);
+        int by = (rodape.Height - E(34)) / 2;
+        bInstalar.Location = new Point(rodape.Width - E(24) - bInstalar.Width, by);
+        bAbrir.Location = new Point(bInstalar.Left - E(8) - bAbrir.Width, by);
+        rodape.Controls.AddRange(new Control[] { bInstalar, bAbrir });
+        bInstalar.Click += (s, e) => DialogResult = DialogResult.OK;
+        bAbrir.Click += (s, e) => DialogResult = DialogResult.No;
+        AcceptButton = bInstalar;
+    }
+}
+
