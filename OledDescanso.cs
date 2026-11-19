@@ -16,8 +16,8 @@ using System.Reflection;
 [assembly: AssemblyProduct("OLED Descanso")]
 [assembly: AssemblyDescription("Apaga o monitor OLED quando ele fica sem uso")]
 [assembly: AssemblyCopyright("Licença MIT")]
-[assembly: AssemblyVersion("1.1.2.0")]
-[assembly: AssemblyFileVersion("1.1.2.0")]
+[assembly: AssemblyVersion("1.1.3.0")]
+[assembly: AssemblyFileVersion("1.1.3.0")]
 
 static class Program
 {
@@ -36,6 +36,12 @@ static class Program
 
         if (args.Length == 2 && args[0] == "--ico") { Icone.SalvarIco(args[1]); return; }
         if (args.Length == 2 && args[0] == "--logo") { using (var b = Icone.Desenhar(256, false)) b.Save(args[1]); return; }
+        if (args.Length == 2 && args[0] == "--testesom")
+        {
+            // mede por 3 s se tem som tocando (para diagnostico)
+            bool t = false; for (int i = 0; i < 30 && !t; i++) { t = Som.Tocando(); if (!t) System.Threading.Thread.Sleep(100); }
+            File.WriteAllText(args[1], t ? "tocando" : "silencio"); return;
+        }
         if (args.Length == 1 && args[0] == "--desinstalar") { Application.EnableVisualStyles(); Instalador.Desinstalar(); return; }
         // aberto de fora da pasta de programas (ex.: Downloads): oferece instalar
         if (args.Length == 0 && !Instalador.EstaInstalado)
@@ -715,6 +721,15 @@ class App : ApplicationContext
         return (s & 0x2 /*ES_DISPLAY_REQUIRED*/) != 0;
     }
 
+    // Tem som tocando em alguma saida? (o Edge/Chrome nem sempre avisam o Windows que tem video passando,
+    // ex.: live da Twitch com o foco na outra tela). Com som, as "fotos" decidem em qual monitor a imagem muda.
+    DateTime somVistoEm = DateTime.MinValue;
+    bool SomRecente()
+    {
+        if (Som.Tocando()) somVistoEm = DateTime.Now;
+        return (DateTime.Now - somVistoEm).TotalSeconds < 6;   // pausas curtas no audio nao contam como silencio
+    }
+
     // Existe uma janela em tela cheia (video, jogo) ocupando o OLED inteiro?
     bool TemTelaCheia(Rectangle mon)
     {
@@ -1030,6 +1045,8 @@ class App : ApplicationContext
         }
 
         bool video = respeitarVideo && AlguemPediuTelaLigada();
+        // video sem aviso: som tocando + a imagem do monitor mudando ("fotos"). So olha o som se as fotos estao ligadas
+        bool videoOuSom = video || (respeitarVideo && detectarFotos && escolhidos.Count > 0 && !pausado && SomRecente());
 
         // Presenca: mouse, teclado ou controle. Sem presenca por muito tempo = limite de seguranca
         if (atividade || mexeu || ControleMexeu()) ultimaPresenca = DateTime.Now;
@@ -1084,9 +1101,9 @@ class App : ApplicationContext
                 usando = (telaCheiaMonitor == k) ||
                          (video && TemTelaCheia(tela.Bounds)) ||
                          (video && !detectarFotos && !apagada) ||
-                         (video && detectarFotos && !telaCheiaAtiva && !apagada && quaseApagando && ImagemMudando(k, tela.Bounds));
+                         (videoOuSom && detectarFotos && !telaCheiaAtiva && !apagada && quaseApagando && ImagemMudando(k, tela.Bounds));
             }
-            if (usando || apagada || !video) { amostras.Remove(k); ultimaMudanca.Remove(k); ultimaAmostra.Remove(k); }
+            if (usando || apagada || !videoOuSom) { amostras.Remove(k); ultimaMudanca.Remove(k); ultimaAmostra.Remove(k); }
 
             if (usando) { forcados.Remove(k); ultimoUso[k] = DateTime.Now; Esconder(k); continue; }
 
@@ -2791,3 +2808,73 @@ class JanelaInstalar : JanelaBase
     }
 }
 
+
+// =====================================================================
+//  Som: tem algo tocando em alguma saida de audio? (so le o nivel do medidor, nao grava nada)
+// =====================================================================
+static class Som
+{
+    [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class Enumerador { }
+    [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IMMDeviceEnumerator { [PreserveSig] int EnumAudioEndpoints(int fluxo, int estados, out IMMDeviceCollection col); }
+    [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IMMDeviceCollection { [PreserveSig] int GetCount(out int n); [PreserveSig] int Item(int i, out IMMDevice d); }
+    [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IMMDevice { [PreserveSig] int Activate(ref Guid iid, int ctx, IntPtr p, [MarshalAs(UnmanagedType.IUnknown)] out object o); }
+    [ComImport, Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IAudioMeterInformation { [PreserveSig] int GetPeakValue(out float p); }
+
+    static List<IAudioMeterInformation> medidores;
+    static DateTime lidos;
+    static bool indisponivel;
+
+    public static bool Tocando()
+    {
+        if (indisponivel) return false;
+        try
+        {
+            // a lista de saidas e relida a cada 30 s (fone ligado/desligado)
+            if (medidores == null || (DateTime.Now - lidos).TotalSeconds > 30) Recarregar();
+            foreach (var m in medidores) { float p; if (m.GetPeakValue(out p) == 0 && p > 0.0005f) return true; }
+        }
+        catch { Soltar(); medidores = null; }
+        return false;
+    }
+
+    static void Soltar()
+    {
+        if (medidores == null) return;
+        foreach (var m in medidores) try { Marshal.ReleaseComObject(m); } catch { }
+        medidores.Clear();
+    }
+
+    static void Recarregar()
+    {
+        Soltar();
+        medidores = new List<IAudioMeterInformation>();
+        lidos = DateTime.Now;
+        IMMDeviceEnumerator en;
+        try { en = (IMMDeviceEnumerator)new Enumerador(); }
+        catch { indisponivel = true; return; }
+        IMMDeviceCollection col = null;
+        try
+        {
+            if (en.EnumAudioEndpoints(0 /*saidas*/, 1 /*ativas*/, out col) != 0 || col == null) return;
+            int n; col.GetCount(out n);
+            var iid = new Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064");
+            for (int i = 0; i < n; i++)
+            {
+                IMMDevice d;
+                if (col.Item(i, out d) != 0 || d == null) continue;
+                object o;
+                if (d.Activate(ref iid, 23 /*CLSCTX_ALL*/, IntPtr.Zero, out o) == 0 && o != null) medidores.Add((IAudioMeterInformation)o);
+                Marshal.ReleaseComObject(d);
+            }
+        }
+        finally
+        {
+            if (col != null) Marshal.ReleaseComObject(col);
+            Marshal.ReleaseComObject(en);
+        }
+    }
+}
