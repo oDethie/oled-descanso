@@ -16,8 +16,8 @@ using System.Reflection;
 [assembly: AssemblyProduct("OLED Descanso")]
 [assembly: AssemblyDescription("Apaga o monitor OLED quando ele fica sem uso")]
 [assembly: AssemblyCopyright("Licença MIT")]
-[assembly: AssemblyVersion("1.1.3.0")]
-[assembly: AssemblyFileVersion("1.1.3.0")]
+[assembly: AssemblyVersion("1.1.4.0")]
+[assembly: AssemblyFileVersion("1.1.4.0")]
 
 static class Program
 {
@@ -730,10 +730,25 @@ class App : ApplicationContext
         return (DateTime.Now - somVistoEm).TotalSeconds < 6;   // pausas curtas no audio nao contam como silencio
     }
 
-    // Existe uma janela em tela cheia (video, jogo) ocupando o OLED inteiro?
-    bool TemTelaCheia(Rectangle mon)
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+
+    // A janela em tela cheia deste monitor e de um programa que esta tocando som agora?
+    // (ex.: live da Twitch no Edge em tela cheia, mesmo com o foco em outra tela e sem o Edge avisar o Windows)
+    bool TelaCheiaComSom(Rectangle mon)
     {
-        bool achou = false;
+        var h = JanelaTelaCheia(mon);
+        if (h == IntPtr.Zero) return false;
+        uint pid; GetWindowThreadProcessId(h, out pid);
+        string nome = Som.NomeDoProcesso(pid);
+        return nome != "" && Som.ProgramasTocando().Contains(nome); // mesmo programa (o audio do Edge/Chrome sai de outro processo com o mesmo nome)
+    }
+
+    // Existe uma janela em tela cheia (video, jogo) ocupando o OLED inteiro?
+    bool TemTelaCheia(Rectangle mon) { return JanelaTelaCheia(mon) != IntPtr.Zero; }
+
+    IntPtr JanelaTelaCheia(Rectangle mon)
+    {
+        IntPtr achou = IntPtr.Zero;
         var cls = new System.Text.StringBuilder(64);
         EnumWindows((h, l) =>
         {
@@ -744,7 +759,7 @@ class App : ApplicationContext
             if (c == "Progman" || c == "WorkerW" || c == "Shell_TrayWnd") return true;
             RECT r; GetWindowRect(h, out r);
             // tela cheia = exatamente o monitor (janela maximizada passa 8px pra fora, nao conta)
-            if (r.L == mon.Left && r.T == mon.Top && r.R == mon.Right && r.B == mon.Bottom) { achou = true; return false; }
+            if (r.L == mon.Left && r.T == mon.Top && r.R == mon.Right && r.B == mon.Bottom) { achou = h; return false; }
             return true;
         }, IntPtr.Zero);
         return achou;
@@ -1098,10 +1113,14 @@ class App : ApplicationContext
                 // Tela cheia so segura o monitor se: e a janela que voce esta usando (jogo),
                 // ou se tem video tocando. VS/app parado em tela cheia, sem foco, nao segura mais.
                 // Sem "fotos": qualquer video tocando segura todos os monitores (comportamento antigo)
+                // Tela cheia cujo proprio programa esta tocando som (live/video) tambem segura, sem fotos.
+                // As fotos so ficam de fora no monitor do jogo/app ativo em tela cheia (que ja fica ligado);
+                // uma tela cheia ativa no OUTRO monitor nao impede mais de olhar este.
                 usando = (telaCheiaMonitor == k) ||
                          (video && TemTelaCheia(tela.Bounds)) ||
+                         (respeitarVideo && SomRecente() && TelaCheiaComSom(tela.Bounds)) ||
                          (video && !detectarFotos && !apagada) ||
-                         (videoOuSom && detectarFotos && !telaCheiaAtiva && !apagada && quaseApagando && ImagemMudando(k, tela.Bounds));
+                         (videoOuSom && detectarFotos && telaCheiaMonitor != k && !apagada && quaseApagando && ImagemMudando(k, tela.Bounds));
             }
             if (usando || apagada || !videoOuSom) { amostras.Remove(k); ultimaMudanca.Remove(k); ultimaAmostra.Remove(k); }
 
@@ -2823,6 +2842,112 @@ static class Som
     interface IMMDevice { [PreserveSig] int Activate(ref Guid iid, int ctx, IntPtr p, [MarshalAs(UnmanagedType.IUnknown)] out object o); }
     [ComImport, Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IAudioMeterInformation { [PreserveSig] int GetPeakValue(out float p); }
+
+    // ---- Por aplicativo: quais programas estao emitindo som agora (como o mixer de volume do Windows) ----
+    [ComImport, Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IAudioSessionManager2
+    {
+        [PreserveSig] int GetAudioSessionControl(IntPtr a, int b, out IntPtr c);   // (IAudioSessionManager)
+        [PreserveSig] int GetSimpleAudioVolume(IntPtr a, int b, out IntPtr c);     // (IAudioSessionManager)
+        [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator e);
+    }
+    [ComImport, Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IAudioSessionEnumerator
+    {
+        [PreserveSig] int GetCount(out int n);
+        [PreserveSig] int GetSession(int i, [MarshalAs(UnmanagedType.IUnknown)] out object s);
+    }
+    [ComImport, Guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IAudioSessionControl2
+    {
+        // metodos herdados de IAudioSessionControl, na ordem (so ocupam o lugar)
+        [PreserveSig] int GetState(out int s);
+        [PreserveSig] int GetDisplayName(out IntPtr n);
+        [PreserveSig] int SetDisplayName(IntPtr n, IntPtr ctx);
+        [PreserveSig] int GetIconPath(out IntPtr p);
+        [PreserveSig] int SetIconPath(IntPtr p, IntPtr ctx);
+        [PreserveSig] int GetGroupingParam(out Guid g);
+        [PreserveSig] int SetGroupingParam(IntPtr g, IntPtr ctx);
+        [PreserveSig] int RegisterAudioSessionNotification(IntPtr n);
+        [PreserveSig] int UnregisterAudioSessionNotification(IntPtr n);
+        // IAudioSessionControl2
+        [PreserveSig] int GetSessionIdentifier(out IntPtr id);
+        [PreserveSig] int GetSessionInstanceIdentifier(out IntPtr id);
+        [PreserveSig] int GetProcessId(out uint pid);
+    }
+
+    static HashSet<string> tocandoCache = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    static DateTime tocandoLido = DateTime.MinValue;
+    static readonly Dictionary<uint, string> nomePid = new Dictionary<uint, string>();
+
+    public static string NomeDoProcesso(uint pid)
+    {
+        string n;
+        if (nomePid.TryGetValue(pid, out n)) return n;
+        try { using (var p = System.Diagnostics.Process.GetProcessById((int)pid)) n = p.ProcessName; } catch { n = ""; }
+        if (nomePid.Count > 300) nomePid.Clear();
+        nomePid[pid] = n;
+        return n;
+    }
+
+    // Nomes dos programas (ex.: "msedge") com som saindo agora. Relido no maximo a cada 1,5 s.
+    public static HashSet<string> ProgramasTocando()
+    {
+        if (indisponivel || (DateTime.Now - tocandoLido).TotalSeconds < 1.5) return tocandoCache;
+        tocandoLido = DateTime.Now;
+        var nomes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        IMMDeviceEnumerator en = null; IMMDeviceCollection col = null;
+        try
+        {
+            en = (IMMDeviceEnumerator)new Enumerador();
+            if (en.EnumAudioEndpoints(0 /*saidas*/, 1 /*ativas*/, out col) == 0 && col != null)
+            {
+                int n; col.GetCount(out n);
+                var iid = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
+                for (int i = 0; i < n; i++)
+                {
+                    IMMDevice d;
+                    if (col.Item(i, out d) != 0 || d == null) continue;
+                    object o = null;
+                    try
+                    {
+                        if (d.Activate(ref iid, 23, IntPtr.Zero, out o) != 0 || o == null) continue;
+                        IAudioSessionEnumerator se;
+                        if (((IAudioSessionManager2)o).GetSessionEnumerator(out se) != 0 || se == null) continue;
+                        int ns; se.GetCount(out ns);
+                        for (int j = 0; j < ns; j++)
+                        {
+                            object s;
+                            if (se.GetSession(j, out s) != 0 || s == null) continue;
+                            try
+                            {
+                                float pico;
+                                var med = s as IAudioMeterInformation; // a sessao tambem tem medidor proprio
+                                if (med == null || med.GetPeakValue(out pico) != 0 || pico <= 0.0005f) continue;
+                                uint pid; ((IAudioSessionControl2)s).GetProcessId(out pid);
+                                if (pid == 0) continue; // sons do sistema
+                                string nome = NomeDoProcesso(pid);
+                                if (nome != "") nomes.Add(nome);
+                            }
+                            catch { }
+                            finally { Marshal.ReleaseComObject(s); }
+                        }
+                        Marshal.ReleaseComObject(se);
+                    }
+                    catch { }
+                    finally { if (o != null) Marshal.ReleaseComObject(o); Marshal.ReleaseComObject(d); }
+                }
+            }
+        }
+        catch { }
+        finally
+        {
+            if (col != null) Marshal.ReleaseComObject(col);
+            if (en != null) Marshal.ReleaseComObject(en);
+        }
+        tocandoCache = nomes;
+        return nomes;
+    }
 
     static List<IAudioMeterInformation> medidores;
     static DateTime lidos;
